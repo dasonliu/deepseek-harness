@@ -53,6 +53,7 @@ function mountBar(shell: SessionInputShell, over?: { running?: boolean; disabled
     addImages: () => null,
     removeImage: () => {},
     draftImages: () => [],
+    uploadDroppedFile: undefined,
     resolveSubmitMode: () => 'queue',
     toggleCommandMenu: vi.fn(),
     useNotices: bindSnapshotSelector(shell.notices),

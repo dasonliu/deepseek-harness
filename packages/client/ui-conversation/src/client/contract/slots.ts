@@ -499,6 +499,12 @@ export interface ComposerBarInjected {
   removeImage: ((id: DraftAttachmentId) => void) | undefined
   /** Resolve ordered input ids to browser-owned draft images. */
   draftImages: ((ids: readonly DraftAttachmentId[]) => readonly ComposerAttachment[]) | undefined
+  /**
+   * Upload one dropped file's bytes to the session's `.dsh-uploads` directory
+   * and resolve its written absolute path (the browser cannot read a dropped
+   * file's path itself); absent with the session.
+   */
+  uploadDroppedFile: ((file: File) => Promise<string>) | undefined
   /** Resolve one keyboard submission gesture against the current running state and persisted preference. */
   resolveSubmitMode: (
     running: boolean,

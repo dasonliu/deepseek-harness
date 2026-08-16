@@ -75,6 +75,10 @@ export const rpcErrorSchema: z.ZodType<RpcError> = z.discriminatedUnion('code', 
   z.object({ code: z.literal('subagent-not-resumable'), message: z.string(), details: z.object({ childSessionId: z.string() }) }),
   z.object({ code: z.literal('subagent-unauthorized'), message: z.string(), details: z.object({ childSessionId: z.string() }) }),
   z.object({ code: z.literal('subagent-delivery-unavailable'), message: z.string(), details: z.object({ childSessionId: z.string() }) }),
+  z.object({ code: z.literal('upload-cwd-not-allowed'), message: z.string(), details: z.object({ cwd: z.string() }) }),
+  z.object({ code: z.literal('upload-invalid-content'), message: z.string(), details: z.object({}) }),
+  z.object({ code: z.literal('upload-too-large'), message: z.string(), details: z.object({ maxBytes: z.number(), size: z.number() }) }),
+  z.object({ code: z.literal('upload-failed'), message: z.string(), details: z.object({}) }),
   z.object({ code: z.literal('internal'), message: z.string(), details: z.object({}) }),
 ]) as unknown as z.ZodType<RpcError>
 

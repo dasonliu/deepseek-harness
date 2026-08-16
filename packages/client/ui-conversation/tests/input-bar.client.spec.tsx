@@ -5,7 +5,7 @@
 // decoration backdrop, error/notice strips, and the focus-keeping mousedown.
 
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
-import { act, cleanup, fireEvent, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
 import {
   createSnapshotStore, EMPTY_CHAT_SNAPSHOT, EMPTY_CONVERSATION_VIEWS,
@@ -86,6 +86,8 @@ interface BenchOptions {
   rightItems?: React.ReactNode
   attachments?: readonly ComposerAttachment[]
   addImages?: (files: readonly File[]) => string | null
+  /** Host-side dropped-file uploader (absent = upload unavailable). */
+  uploadDroppedFile?: (file: File) => Promise<string>
   commandMenuOpen?: boolean
   busyEnter?: 'queue' | 'steer'
   toggleCommandMenu?: (selection: { start: number; end: number }) => void
@@ -162,6 +164,7 @@ function bench(over?: BenchOptions) {
     keyboard: shell,
     addImages: over?.addImages ?? (() => null),
     removeImage,
+    uploadDroppedFile: over?.uploadDroppedFile,
     draftImages: ids => ids.flatMap((id) => {
       const attachment = over?.attachments?.find(candidate => candidate.id === id)
       return attachment === undefined ? [] : [attachment]
@@ -229,7 +232,7 @@ describe('image draft rail', () => {
     const dataTransfer = { types: ['Files'], files: [image], dropEffect: 'none' }
     // The drag never touches the composer card: the listeners are page-wide.
     expect(fireEvent.dragEnter(document.body, { dataTransfer })).toBe(false)
-    expect(view.getByRole('status').textContent).toContain('图片拖动到此处即可添加')
+    expect(view.getByRole('status').textContent).toContain('文件拖动到此处即可添加')
     expect(fireEvent.dragOver(document.body, { dataTransfer })).toBe(false)
     expect(dataTransfer.dropEffect).toBe('copy')
     expect(fireEvent.drop(document.body, { dataTransfer })).toBe(false)
@@ -297,28 +300,6 @@ describe('image draft rail', () => {
     expect(within.view.queryByRole('alert')).toBeNull()
   })
 
-  it('announces the format problem before any limit when the batch holds a non-image', () => {
-    const addImages = vi.fn(() => '仅支持 PNG、JPG、WebP、GIF 格式的图片')
-    const { view } = bench({
-      addImages,
-      imageLimits: {
-        maxImageBytes: 8,
-        maxImagesPerMessage: 1,
-        maxMessageImageBytes: 8,
-        maxImagePixels: 40_000_000,
-        mediaTypes: ['image/png'] as const,
-      },
-    })
-    // Oversized AND over-count AND wrong type: the format rejection wins.
-    const files = [
-      new File([new ArrayBuffer(64)], 'a.pdf', { type: 'application/pdf' }),
-      new File([new ArrayBuffer(64)], 'b.pdf', { type: 'application/pdf' }),
-    ]
-    fireEvent.drop(document.body, { dataTransfer: { types: ['Files'], files, dropEffect: 'none' } })
-    expect(addImages).toHaveBeenCalledWith(files)
-    expect(view.getByRole('alert').textContent).toContain('仅支持 PNG、JPG、WebP、GIF 格式的图片')
-  })
-
   it('shows the projected limits in the drop overlay desc line', () => {
     const { view } = bench({
       addImages: vi.fn(() => null),
@@ -331,7 +312,7 @@ describe('image draft rail', () => {
       },
     })
     fireEvent.dragEnter(document.body, { dataTransfer: { types: ['Files'], files: [], dropEffect: 'none' } })
-    expect(view.getByRole('status').textContent).toContain('最多 20 张，每张 5MB')
+    expect(view.getByRole('status').textContent).toContain('最多 20 张图片，每张 5MB；其他文件将插入其本地路径')
   })
 
   it('announces server attachment rejections as product copy, other codes as developer text', () => {
@@ -357,7 +338,7 @@ describe('image draft rail', () => {
     const image = new File([Uint8Array.of(1)], 'dropped.png', { type: 'image/png' })
     const dataTransfer = { types: ['Files'], files: [image], dropEffect: 'copy' }
     fireEvent.dragEnter(document.body, { dataTransfer })
-    expect(view.getByRole('status').textContent).toContain('当前无法添加图片')
+    expect(view.getByRole('status').textContent).toContain('当前无法添加文件')
     fireEvent.dragOver(document.body, { dataTransfer })
     expect(dataTransfer.dropEffect).toBe('none')
     fireEvent.drop(document.body, { dataTransfer })
@@ -418,6 +399,139 @@ describe('image draft rail', () => {
     const dataTransfer = { types: ['Files'], files: [new File([Uint8Array.of(1)], 'x.png', { type: 'image/png' })], dropEffect: 'none' }
     fireEvent.drop(card, { dataTransfer })
     expect(view.getByRole('alert').textContent).toContain('图片读取服务不可用')
+  })
+})
+
+describe('dropped file paths', () => {
+  const pdf = (name: string) => new File([new ArrayBuffer(64)], name, { type: 'application/pdf' })
+  const drop = (files: File[], uriList: string | undefined) => {
+    const dataTransfer = {
+      types: ['Files'], files, dropEffect: 'none',
+      getData: (type: string) => type === 'text/uri-list' ? (uriList ?? '') : '',
+    }
+    fireEvent.drop(document.body, { dataTransfer })
+  }
+
+  it('inserts the decoded local paths of dropped files at the caret, one per line', () => {
+    const addImages = vi.fn(() => null)
+    const { textarea, shell } = bench({ addImages, draft: '参考：' })
+    textarea.setSelectionRange(3, 3)
+    drop([pdf('spec.pdf'), pdf('notes.pdf')], 'file:///E:/docs/spec.pdf\r\nfile:///E:/docs/notes.pdf')
+    expect(shell.snapshot.draft).toBe('参考：\nE:/docs/spec.pdf\nE:/docs/notes.pdf')
+    expect(addImages).not.toHaveBeenCalled()
+  })
+
+  it('separates the inserted block from surrounding prose on both sides', () => {
+    const addImages = vi.fn(() => null)
+    const { textarea, shell } = bench({ addImages, draft: '前后' })
+    textarea.setSelectionRange(1, 1)
+    drop([pdf('spec.pdf')], 'file:///E:/docs/spec.pdf')
+    expect(shell.snapshot.draft).toBe('前\nE:/docs/spec.pdf\n后')
+    expect(addImages).not.toHaveBeenCalled()
+  })
+
+  it('routes images to the rail and inserts paths only for the other files', () => {
+    const addImages = vi.fn(() => null)
+    const { shell } = bench({ addImages })
+    const image = new File([Uint8Array.of(1)], 'pic.png', { type: 'image/png' })
+    drop([pdf('spec.pdf'), image], 'file:///E:/docs/spec.pdf\r\nfile:///E:/pic.png')
+    expect(shell.snapshot.draft).toBe('E:/docs/spec.pdf')
+    expect(addImages).toHaveBeenCalledWith([image])
+  })
+
+  it('routes by the image service media types: an image type outside the list inserts its path', () => {
+    const addImages = vi.fn(() => null)
+    const { shell } = bench({
+      addImages,
+      imageLimits: {
+        maxImageBytes: 8,
+        maxImagesPerMessage: 2,
+        maxMessageImageBytes: 8,
+        maxImagePixels: 40_000_000,
+        mediaTypes: ['image/png'] as const,
+      },
+    })
+    drop([new File([new ArrayBuffer(8)], 'icon.svg', { type: 'image/svg+xml' })], 'file:///E:/icon.svg')
+    expect(shell.snapshot.draft).toBe('E:/icon.svg')
+    expect(addImages).not.toHaveBeenCalled()
+  })
+
+  it('announces the missing paths when the browser advertises none, leaving the draft alone', () => {
+    const addImages = vi.fn(() => null)
+    const { view, shell } = bench({ addImages, draft: '保持' })
+    drop([pdf('spec.pdf')], undefined)
+    expect(shell.snapshot.draft).toBe('保持')
+    expect(view.getByRole('alert').textContent).toContain('无法读取 1 个文件的本地路径（浏览器限制）')
+  })
+
+  it('announces only the files whose paths the browser withheld from a partial drop', () => {
+    const addImages = vi.fn(() => null)
+    const { view, shell } = bench({ addImages })
+    drop([pdf('a.pdf'), pdf('b.pdf')], 'file:///E:/a.pdf')
+    expect(shell.snapshot.draft).toBe('E:/a.pdf')
+    expect(view.getByRole('alert').textContent).toContain('无法读取 1 个文件的本地路径（浏览器限制）')
+  })
+
+  it('uploads a dropped file to the Host and inserts its path when the browser advertises none', async () => {
+    const addImages = vi.fn(() => null)
+    const uploadDroppedFile = vi.fn(async () => 'E:/deepseek-harness/.dsh-uploads/spec.pdf')
+    const { shell } = bench({ addImages, uploadDroppedFile })
+    drop([pdf('spec.pdf')], undefined)
+    await waitFor(() => {
+      expect(shell.snapshot.draft).toBe('E:/deepseek-harness/.dsh-uploads/spec.pdf')
+    })
+    expect(uploadDroppedFile).toHaveBeenCalledTimes(1)
+    expect(addImages).not.toHaveBeenCalled()
+  })
+
+  it('inserts the uploaded subset and toasts the rest when some uploads fail', async () => {
+    const uploadDroppedFile = vi.fn(async (file: File) => {
+      if (file.name === 'b.pdf') throw new Error('boom')
+      return 'E:/deepseek-harness/.dsh-uploads/a.pdf'
+    })
+    const { view, shell } = bench({ addImages: vi.fn(() => null), uploadDroppedFile })
+    drop([pdf('a.pdf'), pdf('b.pdf')], undefined)
+    await waitFor(() => {
+      expect(shell.snapshot.draft).toBe('E:/deepseek-harness/.dsh-uploads/a.pdf')
+    })
+    expect(view.getByRole('alert').textContent).toContain('无法读取 b.pdf 的本地路径（浏览器限制）')
+  })
+
+  it('announces when every upload failed, leaving the draft alone', async () => {
+    const uploadDroppedFile = vi.fn(async () => { throw new Error('boom') })
+    const { view, shell } = bench({ addImages: vi.fn(() => null), uploadDroppedFile, draft: '保持' })
+    drop([pdf('x.pdf'), pdf('y.pdf')], undefined)
+    await waitFor(() => {
+      expect(view.getByRole('alert').textContent).toContain('无法读取 2 个文件的本地路径（浏览器限制）')
+    })
+    expect(shell.snapshot.draft).toBe('保持')
+  })
+
+  it('names the file when a single upload fails', async () => {
+    const uploadDroppedFile = vi.fn(async () => { throw new Error('boom') })
+    const { view, shell } = bench({ addImages: vi.fn(() => null), uploadDroppedFile })
+    drop([pdf('spec.pdf')], undefined)
+    await waitFor(() => {
+      expect(view.getByRole('alert').textContent).toContain('无法读取 spec.pdf 的本地路径（浏览器限制）')
+    })
+    expect(shell.snapshot.draft).toBe('')
+  })
+
+  it('shows an uploading indicator while the upload is in flight, then clears it', async () => {
+    let settle!: (value: string) => void
+    const uploadDroppedFile = vi.fn(() => new Promise<string>((resolve) => { settle = resolve }))
+    const { view, shell } = bench({ addImages: vi.fn(() => null), uploadDroppedFile })
+    drop([pdf('spec.pdf')], undefined)
+    await waitFor(() => {
+      expect(view.getByRole('status').textContent).toContain('正在上传文件')
+    })
+    await act(async () => {
+      settle('E:/deepseek-harness/.dsh-uploads/spec.pdf')
+    })
+    await waitFor(() => {
+      expect(view.queryByRole('status')).toBeNull()
+    })
+    expect(shell.snapshot.draft).toBe('E:/deepseek-harness/.dsh-uploads/spec.pdf')
   })
 })
 

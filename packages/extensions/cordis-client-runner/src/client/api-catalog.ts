@@ -342,6 +342,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [{ name: 'path', description: 'absolute or host-resolvable path.' }],
       },
       {
+        signature: 'uploadDroppedFile(name: string, content: string, cwd: string): Promise<string>',
+        description: 'Write a dropped reference file\'s bytes to `<cwd>/.dsh-uploads/<name>` and return its absolute path.',
+        parameters: [{ name: 'name', description: 'single basename to keep.' }, { name: 'content', description: 'canonical base64 bytes.' }, { name: 'cwd', description: 'the session\'s workspace root.' }],
+        returns: 'the written file\'s absolute path.',
+      },
+      {
         signature: 'rename(workspaceId: WorkspaceId, title: string): Promise<WorkspaceView>',
         description: 'Rename a Workspace.',
         parameters: [{ name: 'workspaceId', description: 'target workspace.' }, { name: 'title', description: 'the new display title.' }],

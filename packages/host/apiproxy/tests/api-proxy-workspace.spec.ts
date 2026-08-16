@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, realpathSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -64,6 +64,7 @@ async function harness(
   extras: {
     openPath?: (path: string, signal: AbortSignal) => Promise<void>
     canOpenPath?: () => boolean
+    uploadDroppedFileMaxBytes?: number
   } = {},
 ) {
   const ctx = new Context()
@@ -107,6 +108,7 @@ async function harness(
     cwd: root,
     ...extras.openPath === undefined ? {} : { openPath: extras.openPath },
     ...extras.canOpenPath === undefined ? {} : { canOpenPath: extras.canOpenPath },
+    ...extras.uploadDroppedFileMaxBytes === undefined ? {} : { uploadDroppedFileMaxBytes: extras.uploadDroppedFileMaxBytes },
   })
   return { api, ctx, storageDomain, root }
 }
@@ -256,6 +258,44 @@ describe('host.openPath', () => {
     const pending = api.host.openPath(request({ path: '/tmp/a.txt' }), abort.signal)
     abort.abort()
     expect((await pending).result).toMatchObject({ ok: false, error: { code: 'cancelled' } })
+  })
+})
+
+describe('host.uploadDroppedFile', () => {
+  it('writes the dropped bytes under the project .dsh-uploads directory and returns the path', async () => {
+    const { api, root } = await harness()
+    const content = Buffer.from('hello reference').toString('base64')
+    const response = await api.host.uploadDroppedFile(request({
+      name: 'notes.txt', content, cwd: root,
+    }), new AbortController().signal)
+    const path = expectOk(response).path
+    expect(path).toBe(join(root, '.dsh-uploads', 'notes.txt'))
+    expect(readFileSync(path, 'utf8')).toBe('hello reference')
+    // A repeated basename deduplicates instead of overwriting.
+    const second = await api.host.uploadDroppedFile(request({
+      name: 'notes.txt', content, cwd: root,
+    }), new AbortController().signal)
+    expect(expectOk(second).path).toBe(join(root, '.dsh-uploads', 'notes-1.txt'))
+  })
+
+  it('refuses a cwd outside the known project roots', async () => {
+    const { api } = await harness()
+    const response = await api.host.uploadDroppedFile(request({
+      name: 'a.txt', content: Buffer.from('x').toString('base64'), cwd: 'C:\\Windows\\System32',
+    }), new AbortController().signal)
+    expect(response.result).toMatchObject({ ok: false, error: { code: 'upload-cwd-not-allowed' } })
+  })
+
+  it('refuses over-limit and non-canonical content', async () => {
+    const { api, root } = await harness(undefined, undefined, { uploadDroppedFileMaxBytes: 4 })
+    const over = await api.host.uploadDroppedFile(request({
+      name: 'big.txt', content: Buffer.from('12345').toString('base64'), cwd: root,
+    }), new AbortController().signal)
+    expect(over.result).toMatchObject({ ok: false, error: { code: 'upload-too-large' } })
+    const malformed = await api.host.uploadDroppedFile(request({
+      name: 'bad.txt', content: 'not-base64!!', cwd: root,
+    }), new AbortController().signal)
+    expect(malformed.result).toMatchObject({ ok: false, error: { code: 'upload-invalid-content' } })
   })
 })
 

@@ -59,6 +59,16 @@ export interface IWorkspaces {
    */
   openPath(path: string): Promise<void>
   /**
+   * Write a dropped reference file's bytes to `<cwd>/.dsh-uploads/<name>` and
+   * return the absolute path (the browser cannot read a dropped file's path,
+   * so reference files land as a copy in the project directory).
+   * @param name - single basename to keep.
+   * @param content - canonical base64 bytes.
+   * @param cwd - the session's workspace root.
+   * @returns the written file's absolute path.
+   */
+  uploadDroppedFile(name: string, content: string, cwd: string): Promise<string>
+  /**
    * Rename a Workspace.
    * @param workspaceId - target workspace.
    * @param title - the new display title.

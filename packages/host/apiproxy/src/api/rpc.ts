@@ -98,6 +98,10 @@ export interface RpcErrorDetailsMap {
   'subagent-not-resumable': { childSessionId: SessionId }
   'subagent-unauthorized': { childSessionId: SessionId }
   'subagent-delivery-unavailable': { childSessionId: SessionId }
+  'upload-cwd-not-allowed': { cwd: string }
+  'upload-invalid-content': {}
+  'upload-too-large': { maxBytes: number; size: number }
+  'upload-failed': {}
   'internal': {}
 }
 

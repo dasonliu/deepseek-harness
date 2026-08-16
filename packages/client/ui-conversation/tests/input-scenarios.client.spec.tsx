@@ -139,6 +139,7 @@ async function scopedBench(register?: (inputTriggers: InputTriggerService) => vo
     addImages: () => null,
     removeImage: () => {},
     draftImages: () => [],
+    uploadDroppedFile: undefined,
     resolveSubmitMode: () => 'queue',
     toggleCommandMenu: (selection) => {
       const snapshot = shell.snapshot

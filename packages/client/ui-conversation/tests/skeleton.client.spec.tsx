@@ -202,6 +202,7 @@ function mount(
           addImages={() => null}
           removeImage={() => {}}
           draftImages={() => []}
+          uploadDroppedFile={undefined}
           resolveSubmitMode={() => 'queue'}
           toggleCommandMenu={vi.fn()}
           useNotices={bindSnapshotSelector(wiring.notices)}

@@ -159,6 +159,9 @@ function fakeApi(overrides: Partial<{ muxFrames: MuxFrame[]; hostFrames: HostFra
       async openPath(request) {
         return { rpcId: request.rpcId, result: { ok: true, value: { opened: true as const } } }
       },
+      async uploadDroppedFile(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { path: `${request.payload.cwd}/.dsh-uploads/${request.payload.name}` } } }
+      },
     },
     workspace: {
       async list(request) {
@@ -422,6 +425,16 @@ describe('unary round trip (handler ⇄ client, no network)', () => {
     const response = await client(api).host.openPath({ path: '/tmp/a.txt' })
     expect(opened).toBe('/tmp/a.txt')
     expect(response.result).toEqual({ ok: true, value: { opened: true } })
+  })
+
+  it('round-trips host.uploadDroppedFile through the wire form', async () => {
+    const api = fakeApi()
+    api.host.uploadDroppedFile = async request => ({
+      rpcId: request.rpcId,
+      result: { ok: true, value: { path: `${request.payload.cwd}/.dsh-uploads/${request.payload.name}` } },
+    })
+    const response = await client(api).host.uploadDroppedFile({ name: 'a.pdf', content: 'AAAA', cwd: '/w' })
+    expect(response.result).toEqual({ ok: true, value: { path: '/w/.dsh-uploads/a.pdf' } })
   })
 
   it('round-trips skill.list through the wire form', async () => {

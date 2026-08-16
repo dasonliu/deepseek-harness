@@ -18,6 +18,7 @@ import {
   hostCreateDirectoryRequestSchema, hostCreateDirectoryValueSchema,
   hostDescribeRequestSchema, hostDescribeValueSchema,
   hostListDirectoryRequestSchema, hostListDirectoryValueSchema,
+  hostUploadDroppedFileRequestSchema, hostUploadDroppedFileValueSchema,
 } from '../src/api/host.schema.ts'
 import {
   workspaceArchiveSessionRequestSchema, workspaceArchiveSessionValueSchema,
@@ -341,6 +342,18 @@ describe('host domain schemas', () => {
       expect(() => hostCreateDirectoryRequestSchema.parse({ path: '/x', name })).toThrow()
     }
     expect(hostCreateDirectoryValueSchema.parse({ path: '/x/new' })).toEqual({ path: '/x/new' })
+  })
+
+  it('validates the dropped-file upload payloads', () => {
+    expect(hostUploadDroppedFileRequestSchema.parse({
+      name: 'a.pdf', content: 'AAAA', cwd: '/w',
+    })).toEqual({ name: 'a.pdf', content: 'AAAA', cwd: '/w' })
+    for (const name of ['', '.', '..', 'a/b', 'a\\b']) {
+      expect(() => hostUploadDroppedFileRequestSchema.parse({ name, content: 'AAAA', cwd: '/w' })).toThrow()
+    }
+    expect(() => hostUploadDroppedFileRequestSchema.parse({ name: 'a', content: '', cwd: '/w' })).toThrow()
+    expect(hostUploadDroppedFileValueSchema.parse({ path: '/w/.dsh-uploads/a.pdf' })).toEqual({ path: '/w/.dsh-uploads/a.pdf' })
+    expect(() => hostUploadDroppedFileValueSchema.parse({ path: '' })).toThrow()
   })
 })
 

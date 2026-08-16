@@ -328,6 +328,17 @@ describe('WorkspaceRuntime', () => {
     await expect(workspaces.pickDirectory()).rejects.toThrow(/no chooser/)
   })
 
+  it('uploads a dropped file through the Host and returns its path', async () => {
+    const ctx = new Context()
+    const api = new FakeApiClient()
+    const workspaces = new WorkspaceRuntime(ctx, api, new SessionRuntime(ctx, api, fakeRemote()))
+    api.onUploadDroppedFile = () => Promise.resolve(ok({ path: '/w/.dsh-uploads/spec.pdf' }))
+    await expect(workspaces.uploadDroppedFile('spec.pdf', 'AAAA', '/w')).resolves.toBe('/w/.dsh-uploads/spec.pdf')
+    expect(api.callsOf('host.uploadDroppedFile')).toEqual([{ name: 'spec.pdf', content: 'AAAA', cwd: '/w' }])
+    api.onUploadDroppedFile = () => Promise.resolve(err({ code: 'upload-too-large', message: 'boom', details: { maxBytes: 1, size: 2 } }))
+    await expect(workspaces.uploadDroppedFile('big.pdf', 'AAAA', '/w')).rejects.toThrow(/boom/)
+  })
+
   it('passes listings and creation through the browse wire, wrapping business failures', async () => {
     const ctx = new Context()
     const api = new FakeApiClient()

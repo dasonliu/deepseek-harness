@@ -250,6 +250,21 @@ export class WorkspaceRuntime implements IWorkspaces {
   }
 
   /**
+   * Write a dropped reference file to the project's `.dsh-uploads` directory.
+   * @param name - single basename to keep.
+   * @param content - canonical base64 bytes.
+   * @param cwd - the session's workspace root.
+   * @returns the written file's absolute path.
+   */
+  async uploadDroppedFile(name: string, content: string, cwd: string): Promise<string> {
+    const response = await this.api.host.uploadDroppedFile({ name, content, cwd })
+    if (!response.result.ok) {
+      throw new Error(`dropped-file upload failed: ${response.result.error.message}`)
+    }
+    return response.result.value.path
+  }
+
+  /**
    * Rename a Workspace.
    * @param workspaceId - target workspace.
    * @param title - new display title (trimmed non-empty by the Host).

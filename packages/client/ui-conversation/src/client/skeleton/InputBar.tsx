@@ -26,6 +26,7 @@ import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ComposerAttachment, ComposerBarProps } from '../contract/slots.ts'
 import { deriveDecorations } from '../input/decorations.ts'
 import type { DraftDecorations } from '../input/decorations.ts'
+import { droppedFilePaths, matchDroppedPaths } from '../input/dropped-paths.ts'
 import {
   attachmentErrorText, attachmentRailLabels, dropOverlayLabels, imageSizeText, lightboxLabels,
 } from '../image-labels.ts'
@@ -45,7 +46,7 @@ export type InputBarProps = ComposerBarProps
 
 export function InputBar({
   useSession, useInput, inputActions, keyboard, addImages, removeImage, draftImages,
-  resolveSubmitMode, toggleCommandMenu, stop, command, t,
+  uploadDroppedFile, resolveSubmitMode, toggleCommandMenu, stop, command, t,
   renderSlot, useNotices, useLexicon, useMenuLauncher,
   useProjection, sessionId, variant, disabled: inert = false, blocked,
   workspacePickerOpen = false, onRequestWorkspace,
@@ -75,6 +76,11 @@ export function InputBar({
   const empty = draft.trim() === '' && attachments.length === 0
   const [preview, setPreview] = useState<ComposerAttachment | null>(null)
   const [dragActive, setDragActive] = useState(false)
+  // Number of dropped-file uploads still in flight: the composer shows an
+  // indeterminate "uploading" strip while it is non-zero, cleared when the
+  // last upload settles. A count (not a boolean) so concurrent drops overlap
+  // without flickering the strip off between settlements.
+  const [resolvingFiles, setResolvingFiles] = useState(0)
   // Transient error banner (image-intake rejections and prompt failures): the
   // seq keys the Toast so an identical repeated message restarts the
   // hold-then-fade cycle instead of silently reusing the faded one.
@@ -365,6 +371,35 @@ export function InputBar({
   })
   /* oxlint-enable typescript/no-unnecessary-condition */
 
+  // Insert the decoded local paths of dropped files at the caret, one draft
+  // transaction (a single undo step) with the same caret-restore/track dance
+  // the paste path performs. A file whose path the browser withheld is
+  // counted into one toast instead of being guessed; the draft read rides
+  // keyboard.snapshot so the callback stays stable across typing renders.
+  const insertDroppedPaths = useCallback((resolved: readonly (string | undefined)[]): void => {
+    if (keyboard === undefined) return
+    const paths = resolved.filter((path): path is string => path !== undefined)
+    if (paths.length === 0) {
+      if (resolved.length > 0) showToast(t('file.pathUnavailable', { count: resolved.length }))
+      return
+    }
+    const draft = keyboard.snapshot.draft
+    const el = inputRef.current
+    const sel = el === null ? { start: draft.length, end: draft.length } : selectionOf(el)
+    // Insert as a block: separate the first/last path from adjacent prose
+    // with a newline unless the caret already sits at a line boundary.
+    const before = sel.start > 0 && draft[sel.start - 1] !== '\n' ? '\n' : ''
+    const after = sel.end < draft.length && draft[sel.end] !== '\n' ? '\n' : ''
+    const text = before + paths.join('\n') + after
+    const next = draft.slice(0, sel.start) + text + draft.slice(sel.end)
+    keyboard.setDraft(next, { start: sel.start, end: sel.end, insertedLength: text.length })
+    const caret = sel.start + text.length
+    if (el !== null) restoreCaret(el, caret)
+    keyboard.track(keyboard.snapshot.draft, caret)
+    const missed = resolved.length - paths.length
+    if (missed > 0) showToast(t('file.pathUnavailable', { count: missed }))
+  }, [keyboard, showToast, t])
+
   const onCopyOrCut = (e: React.ClipboardEvent<HTMLTextAreaElement>, cut: boolean): void => {
     if (input === undefined || keyboard === undefined) return // absent machine: no draft can be copied or cut
     const el = e.currentTarget
@@ -448,14 +483,28 @@ export function InputBar({
     if (rejected !== null) showToast(rejected)
   }, [addImages, attachments, imageLimits, showToast, t])
 
+  // A dropped file is either an image (rail intake) or a path carrier (draft
+  // insertion): the image service's declared media types decide routing, with
+  // the image/* prefix as the heuristic when no limits projection is mounted.
+  const isImageFile = useCallback((file: File): boolean => {
+    if (imageLimits === undefined) return file.type.startsWith('image/')
+    return (imageLimits.mediaTypes as readonly string[]).includes(file.type)
+  }, [imageLimits])
+
   // Whole-page file-drop intake (DeepSeek Chat behavior): the listeners live
-  // on the document so a drop anywhere over the window adds images, not only
-  // over the composer card. Safe as document-level state: the composer-bar
-  // slot is `kind: 'single'`, so at most one bar is mounted to bind these.
-  // Text drags carry no 'Files' type and pass through untouched, keeping the
-  // native drop-text-into-textarea path. The overlay layer itself is
-  // pointer-inert, so it never disturbs the enter/leave count.
-  const canAcceptDrop = !locked && !machineBusy && addImages !== undefined
+  // on the document so a drop anywhere over the window lands, not only over
+  // the composer card. Safe as document-level state: the composer-bar slot is
+  // `kind: 'single'`, so at most one bar is mounted to bind these. Text drags
+  // carry no 'Files' type and pass through untouched, keeping the native
+  // drop-text-into-textarea path. The overlay layer itself is pointer-inert,
+  // so it never disturbs the enter/leave count. A dropped file is routed by
+  // kind: images join the attachment rail, other files insert their local
+  // paths — first decoded from the drag's URI-list formats, then uploaded to
+  // the session's `.dsh-uploads` directory for files the browser described
+  // without a path (`File.path` is gone from every engine). `!locked` already
+  // implies a live session — `keyboard`, the path-insertion target, is present
+  // — so a drop always has somewhere to land; the image rail is additive.
+  const canAcceptDrop = !locked && !machineBusy
   useEffect(() => {
     const hasFiles = (event: globalThis.DragEvent): boolean =>
       event.dataTransfer?.types.includes('Files') ?? false
@@ -484,12 +533,65 @@ export function InputBar({
         || event.clientX >= window.innerWidth || event.clientY >= window.innerHeight
       if ((event.target === document.documentElement || event.target === document.body) && leavingViewport) reset()
     }
+    const uploadDroppedFiles = (files: readonly File[]): void => {
+      if (uploadDroppedFile === undefined) {
+        showToast(t('file.pathUnavailable', { count: files.length }))
+        return
+      }
+      // Name the file(s) in the failure copy: the browser's reported name is
+      // the one fact a failed upload leaves behind, and showing it turns a
+      // generic "couldn't read" into a diagnosable message.
+      const failText = (names: readonly string[]): string => names.length === 1
+        ? t('file.pathUnavailableNamed', { name: names[0] })
+        : t('file.pathUnavailable', { count: names.length })
+      const names = files.map(file => file.name)
+      setResolvingFiles(count => count + 1)
+      const settled = (): void => { setResolvingFiles(count => count - 1) }
+      void Promise.all(files.map(async (file) => {
+        try {
+          return await uploadDroppedFile(file)
+        } catch {
+          return null
+        }
+      })).then((paths) => {
+        settled()
+        // A drop settling after the composer locked (submit underway, session
+        // gone) must not resurrect the draft: drop the result with it.
+        /* v8 ignore next -- upload settling mid-submit, a window the sync harness cannot hold open */
+        if (keyboard === undefined || keyboard.snapshot.phase !== 'plain') return
+        const resolvedPaths = paths.filter((path): path is string => path !== null)
+        const missedNames = names.filter((_, index) => paths[index] === null)
+        if (resolvedPaths.length > 0) insertDroppedPaths(resolvedPaths)
+        if (missedNames.length > 0) showToast(failText(missedNames))
+      })
+    }
     const onDrop = (event: globalThis.DragEvent): void => {
       if (!hasFiles(event)) return
       event.preventDefault()
       reset()
       if (!canAcceptDrop) return
-      intakeImages([...(event.dataTransfer?.files ?? [])])
+      const files = [...(event.dataTransfer?.files ?? [])]
+      const dataTransfer = event.dataTransfer
+      const getData = dataTransfer === null || typeof dataTransfer.getData !== 'function'
+        ? undefined
+        : (type: string) => dataTransfer.getData(type)
+      // Paths pair against the FULL files list (URI lists are emitted in file
+      // order); without an image service every file inserts its path instead.
+      const matched = matchDroppedPaths(files, droppedFilePaths(getData))
+      const images: File[] = []
+      const syncPaths: string[] = []
+      const pending: File[] = []
+      files.forEach((file, index) => {
+        if (addImages !== undefined && isImageFile(file)) images.push(file)
+        else {
+          const path = matched[index]
+          if (path !== undefined) syncPaths.push(path)
+          else pending.push(file)
+        }
+      })
+      if (images.length > 0) intakeImages(images)
+      if (syncPaths.length > 0) insertDroppedPaths(syncPaths)
+      if (pending.length > 0) uploadDroppedFiles(pending)
     }
     document.addEventListener('dragenter', onDragEnter)
     document.addEventListener('dragover', onDragOver)
@@ -503,7 +605,7 @@ export function InputBar({
       document.removeEventListener('drop', onDrop)
       window.removeEventListener('dragend', reset)
     }
-  }, [canAcceptDrop, intakeImages])
+  }, [canAcceptDrop, intakeImages, insertDroppedPaths, isImageFile, uploadDroppedFile])
 
   const closePreview = useCallback(() => { setPreview(null) }, [])
 
@@ -660,6 +762,12 @@ export function InputBar({
       {notice !== null && (
         <div className={clsx(css.notice, notice.level === 'error' && css.noticeError)} role="status">
           {notice.text}
+        </div>
+      )}
+      {resolvingFiles > 0 && (
+        <div className={css.resolving} role="status">
+          <span className={css.spinner} aria-hidden />
+          {t('file.uploading')}
         </div>
       )}
       {/* Trigger clicks land on the card, not the textarea: the toolbar row's

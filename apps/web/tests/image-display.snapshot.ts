@@ -5,7 +5,9 @@
 // user message and an assistant message, and pins the product surfaces: the
 // history ImageGallery loading real fixture bytes through the authorized
 // sessions.attachment route, the single-click ImageLightbox, and the composer
-// intake chain (paste → ordered thumbnail rail → image-only send enablement → remove).
+// intake chain (paste → ordered thumbnail rail → image-only send enablement →
+// remove), plus the drop-file path insertion (URI-list decode → draft, and
+// the browser-limits notice when the drag advertises no path).
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { expect, it } from 'vitest'
 import { installAssembledBootEnv, mountAssembledApp } from './assembled-boot.ts'
@@ -165,9 +167,9 @@ it('accepts a whole-page drop under the limits-labeled overlay and refuses an ov
   const dataTransfer = { types: ['Files'], files: [image], dropEffect: 'none' }
   fireEvent.dragEnter(document.body, { dataTransfer })
   const overlay = await screen.findByRole('status')
-  expect(overlay.textContent).toContain('Drag images here to add them')
+  expect(overlay.textContent).toContain('Drag files here to add them')
   await waitFor(() => {
-    expect(overlay.textContent).toContain('Up to 20 images, 5MB each')
+    expect(overlay.textContent).toContain('Up to 20 images, 5MB each; other files insert their local path')
   })
 
   // Dropping on the transcript area (not the composer card) lands in the rail.
@@ -194,4 +196,44 @@ it('accepts a whole-page drop under the limits-labeled overlay and refuses an ov
   expect(banner.textContent).toContain('A message can include up to 20 images')
   const rail = document.querySelector('[role="group"][aria-label="Pending images"]')
   expect([...(rail?.querySelectorAll('img') ?? [])]).toHaveLength(1)
+})
+
+it('inserts the local path of a dropped non-image file into the composer draft', async () => {
+  mountAssembledApp()
+
+  const tree = await screen.findByRole('tree', { name: 'Sessions' }, { timeout: 10_000 })
+  const start = tree.querySelector<HTMLButtonElement>('button[aria-label="New session in fixture"]')
+  if (start === null) throw new Error('fixture Workspace new-session action missing')
+  fireEvent.click(start)
+  const textarea = await screen.findByPlaceholderText('Describe what you want to build', {}, { timeout: 10_000 })
+
+  // The OS advertises dropped files' local paths through the drag's URI-list
+  // formats; the composer decodes them and inserts the paths at the caret,
+  // leaving the image rail untouched.
+  const spec = new File([new Uint8Array([37, 80, 68, 70])], 'spec.pdf', { type: 'application/pdf' })
+  const dataTransfer = {
+    types: ['Files'], files: [spec], dropEffect: 'none',
+    getData: (type: string) => type === 'text/uri-list' ? 'file:///E:/docs/spec.pdf' : '',
+  }
+  fireEvent.drop(document.body, { dataTransfer })
+
+  await waitFor(() => {
+    const value = (textarea as HTMLTextAreaElement).value
+    if (!value.includes('E:/docs/spec.pdf')) throw new Error(`dropped path missing from draft: ${value}`)
+  }, { timeout: 5_000 })
+  expect(document.querySelector('[role="group"][aria-label="Pending images"]')).toBeNull()
+
+  // A drop whose browser advertises no path is uploaded to the session's
+  // `.dsh-uploads` directory; the composer inserts the returned path.
+  fireEvent.drop(document.body, {
+    dataTransfer: {
+      types: ['Files'],
+      files: [new File([new Uint8Array([1])], 'notes.txt', { type: 'text/plain' })],
+      dropEffect: 'none',
+    },
+  })
+  await waitFor(() => {
+    const value = (textarea as HTMLTextAreaElement).value
+    if (!value.includes('.dsh-uploads/notes.txt')) throw new Error(`uploaded path missing from draft: ${value}`)
+  }, { timeout: 5_000 })
 })

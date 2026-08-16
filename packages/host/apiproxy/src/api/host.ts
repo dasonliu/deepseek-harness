@@ -93,4 +93,18 @@ export interface HostApi {
     request: RpcRequest<{ path: string }>,
     signal: AbortSignal,
   ): Promise<RpcResponse<{ opened: true }>>
+
+  /**
+   * Write one browser-dropped file's bytes to `<cwd>/.dsh-uploads/<name>` and
+   * return the absolute path. The browser cannot read a dropped file's path,
+   * so reference files land as a copy in the session's project directory and
+   * the path is what the composer inserts. `cwd` must be the host launch
+   * directory or a registered workspace root; `name` is a single basename,
+   * deduplicated with a numeric suffix when it already exists. Loopback-pinned
+   * like the other host filesystem methods.
+   */
+  uploadDroppedFile(
+    request: RpcRequest<{ name: string; content: string; cwd: string }>,
+    signal: AbortSignal,
+  ): Promise<RpcResponse<{ path: string }>>
 }

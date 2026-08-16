@@ -4,8 +4,8 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { mkdir, stat } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { mkdir, stat, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { Agent, ModelSelection, ModelSelectionRef, AgentOptions, AgentStatus } from '@deepseek-ai/dsh-agent'
@@ -145,6 +145,35 @@ function decodeBase64(data: string): Uint8Array {
     throw new AttachmentError('Image upload is not canonical base64.', 'INVALID_IMAGE_BASE64')
   }
   return new Uint8Array(decoded)
+}
+
+/** Default ceiling for one dropped reference file before base64 expansion. */
+const DEFAULT_UPLOAD_DROPPED_FILE_MAX_BYTES = 20 * 1024 * 1024
+
+/** The directory inside a project root that received dropped reference files. */
+const UPLOAD_DROPPED_DIR = '.dsh-uploads'
+
+/**
+ * Write dropped bytes under `<root>/.dsh-uploads/`, deduplicating by a
+ * numeric suffix so a repeated basename never overwrites an earlier upload.
+ * @returns the written file's absolute path.
+ */
+async function writeDroppedFile(root: string, name: string, data: Buffer): Promise<string> {
+  const dir = join(root, UPLOAD_DROPPED_DIR)
+  await mkdir(dir, { recursive: true })
+  const dot = name.lastIndexOf('.')
+  const stem = dot > 0 ? name.slice(0, dot) : name
+  const ext = dot > 0 ? name.slice(dot) : ''
+  for (let index = 0; ; index++) {
+    const candidate = join(dir, index === 0 ? name : `${stem}-${String(index)}${ext}`)
+    try {
+      await writeFile(candidate, data, { flag: 'wx' })
+      return candidate
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue
+      throw error
+    }
+  }
 }
 
 /** Validate one prompt as a batch before publishing any durable image object. */
@@ -653,6 +682,8 @@ export interface ApiProxyDefaults {
   cwd: string
   /** Native open-with-default-application; injectable for carrier tests. */
   openPath?: (path: string, signal: AbortSignal) => Promise<void>
+  /** Maximum byte size of one dropped reference file; defaults to {@link DEFAULT_UPLOAD_DROPPED_FILE_MAX_BYTES}. */
+  uploadDroppedFileMaxBytes?: number
   /** Native text-editor handoff; injectable for settings-document tests. */
   openTextFile?: (path: string, signal: AbortSignal) => Promise<void>
   /** Validated DEFLATE level for session-log ZIP entries; defaults to 6. */
@@ -3007,6 +3038,54 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
 
       async openPath(request, signal) {
         return openPath(request, request.payload.path, signal)
+      },
+
+      async uploadDroppedFile(request, signal) {
+        const { name, content, cwd } = request.payload
+        // Destination must be a directory this deployment owns — the launch
+        // dir or a registered workspace — never an arbitrary path a caller chose.
+        const allowed = new Set([defaults.cwd, ...ctx.workspaceRegistry.list().map(workspace => workspace.path)])
+        if (!allowed.has(cwd)) {
+          return err(request, {
+            code: 'upload-cwd-not-allowed',
+            message: `host.uploadDroppedFile refuses to write outside a known project root: ${cwd}`,
+            details: { cwd },
+          })
+        }
+        let bytes: Buffer
+        try {
+          bytes = Buffer.from(content, 'base64')
+          if (content.length === 0 || bytes.toString('base64') !== content) {
+            throw new Error('content is not canonical base64')
+          }
+        } catch (error: unknown) {
+          return err(request, {
+            code: 'upload-invalid-content',
+            message: `host.uploadDroppedFile content is invalid: ${error instanceof Error ? error.message : String(error)}`,
+            details: {},
+          })
+        }
+        const maxBytes = defaults.uploadDroppedFileMaxBytes ?? DEFAULT_UPLOAD_DROPPED_FILE_MAX_BYTES
+        if (bytes.length > maxBytes) {
+          return err(request, {
+            code: 'upload-too-large',
+            message: `host.uploadDroppedFile exceeds the ${String(maxBytes)}-byte limit for a reference file`,
+            details: { maxBytes, size: bytes.length },
+          })
+        }
+        try {
+          const path = await writeDroppedFile(cwd, name, bytes)
+          return ok(request, { path })
+        } catch (error: unknown) {
+          if (signal.aborted) {
+            return err(request, { code: 'cancelled', message: 'dropped-file upload was aborted', details: {} })
+          }
+          return err(request, {
+            code: 'upload-failed',
+            message: `host.uploadDroppedFile write failed: ${error instanceof Error ? error.message : String(error)}`,
+            details: {},
+          })
+        }
       },
     },
 

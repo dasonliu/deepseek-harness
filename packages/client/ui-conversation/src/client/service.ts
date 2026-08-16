@@ -344,6 +344,8 @@ function bytesToBase64(data: Uint8Array): string {
   return btoa(binary)
 }
 
+export { bytesToBase64 }
+
 function revokePreview(url: string): void {
   if (url.startsWith('blob:')) URL.revokeObjectURL(url)
 }

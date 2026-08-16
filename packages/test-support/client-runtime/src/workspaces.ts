@@ -98,6 +98,21 @@ export class TestWorkspaces implements IWorkspaces {
   }
 
   /**
+   * Dropped-file upload (recorded). The default answers with a synthetic
+   * `.dsh-uploads` path; stub to shape a failure or a specific path.
+   * @param name - kept basename.
+   * @param content - canonical base64 bytes.
+   * @param cwd - the session's workspace root.
+   * @returns the written file's absolute path.
+   */
+  async uploadDroppedFile(name: string, content: string, cwd: string): Promise<string> {
+    this.calls.push({ method: 'uploadDroppedFile', args: [name, content, cwd] })
+    const stub = this.stubs.get('uploadDroppedFile')
+    if (stub !== undefined) return await (stub(name, content, cwd) as Promise<string>)
+    return `${cwd}/.dsh-uploads/${name}`
+  }
+
+  /**
    * Directory picker (recorded). The default cancels (null); stub to select.
    * @returns the picked path, or null.
    */

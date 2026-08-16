@@ -52,6 +52,35 @@
   color: var(--dsw-alias-state-error-primary);
 }
 
+.resolving {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  max-width: var(--dsh-composer-card-max-width);
+  margin-bottom: 6px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.spinner {
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--dsw-alias-label-tertiary);
+  border-top-color: var(--dsw-alias-state-business-primary);
+  border-radius: 50%;
+  animation: resolvingSpin 0.8s linear infinite;
+}
+
+@keyframes resolvingSpin {
+  to { transform: rotate(360deg); }
+}
+
 .card {
   box-sizing: border-box;
   position: relative; /* overlay anchor positioning context */

@@ -72,3 +72,18 @@ export const hostOpenPathRequestSchema = z.object({
 export const hostOpenPathValueSchema = z.object({
   opened: z.literal(true),
 }) satisfies z.ZodType<Wire<ResponseValue<'host.openPath'>>>
+
+/** host.uploadDroppedFile request payload: base64 bytes, one basename, a project root. */
+export const hostUploadDroppedFileRequestSchema = z.object({
+  name: z.string().min(1).refine(
+    name => name !== '.' && name !== '..' && !/[/\\]/.test(name),
+    { message: 'host.uploadDroppedFile requires a single non-blank basename' },
+  ),
+  content: z.string().min(1),
+  cwd: z.string().min(1),
+}) satisfies z.ZodType<Wire<RequestPayload<'host.uploadDroppedFile'>>>
+
+/** host.uploadDroppedFile response value: the written file's absolute path. */
+export const hostUploadDroppedFileValueSchema = z.object({
+  path: z.string().min(1),
+}) satisfies z.ZodType<Wire<ResponseValue<'host.uploadDroppedFile'>>>
