@@ -38,4 +38,3 @@ apps/web/dist/
 worktrees/
 .agents/worktrees/
 .typert-*/
-.dsh-uploads/
